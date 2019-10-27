@@ -8,21 +8,68 @@
             [org.httpkit.client :as httpkit-client])
   (:import java.net.URLEncoder))
 
-(def http-defaults
+(def ^:private http-defaults
   {:as               :stream
    :follow-redirects false
    :user-agent       "tekton-watcher"
    :keepalive        120000
-   :timeout          30000})
+   :timeout          15000})
 
 (def ^:private default-mime-type "application/json; charset=utf-8")
 
-(defn- log-request
-  [{:keys [method url] :as request}]
-  (log/info :sending-request :method method :url url)
+(defn- log-out-request
+  [{:keys [cid method url] :as request}]
+  (log/info :out-request :cid cid :method method :url url)
   request)
 
-(defn form-encoder
+(defn- log-out-response
+  [{:keys [status opts]}]
+  (let [{:keys [cid started-at]} opts
+        elapsed-time             (/ (double (- (. System (nanoTime)) started-at)) 1000000.0)]
+    (log/info :out-response :cid cid
+              :status (or status :unknown)
+              :elapsed-time-ms elapsed-time)))
+
+(def json-request-parser
+  "JSON parser for request's bodies."
+  #(json/write-str % :key-fn name))
+
+(defn json-response-parser
+  "JSON parser for response's bodies."
+  [body]
+  (when body
+    (json/read (io/reader body)
+               :key-fn #(if (re-find #"[/\.]" %)
+                          %
+                          (keyword %)))))
+
+(defn- error
+  [{:keys [status body opts error]}]
+  (let [cid (opts :cid)]
+    (when (or error (>= status 400))
+      #:http{:category :http/error
+             :cid      cid
+             :error    (or error
+                           (ex-info "http error" {:status status
+                                                  :body   (json-response-parser body)}))})))
+
+(defn handle-http-response
+  [{:keys [status body] :as response}]
+  (log-out-response response)
+  (or (error response)
+      (json-response-parser body)))
+
+(defn- parse-request-body
+  "If `:http/payload` is given, parses it according to the supplied
+  content-type and assoc's the parsed value as `:body` into the
+  request."
+  [request {:http/keys [payload]}]
+  (if-not payload
+    request
+    (assoc request :body
+           (json-request-parser payload))))
+
+(defn- form-encoder
   "Turns a Clojure map into a string in the x-www-form-urlencoded
   format."
   [data]
@@ -32,35 +79,8 @@
                            "=" (URLEncoder/encode (str v) "UTF-8")))
                     data)))
 
-(def json-request-parser
-  "JSON parser for request's bodies."
-  #(json/write-str % :key-fn name))
-
-(defn json-response-parser
-  "JSON parser for response's bodies."
-  [body]
-  (json/read (io/reader body)
-             :key-fn #(if (re-find #"[/\.]" %)
-                        %
-                        (keyword %))))
-
-(defn- normalize-header-names
-  "Given a map containing header names and their values, transforms all
-  keys to downcased strings."
-  [headers]
-  (letfn [(downcase [[k v]]
-            [(string/lower-case (name k)) v])]
-    (walk/postwalk #(if-not (map-entry? %)
-                      %
-                      (downcase %)) headers)))
-
-(defn handle-http-response
-  [{:keys [status body]}]
-  (log/info :response :status 200)
-  (json-response-parser body))
-
 (defn- add-query-string
-  "If `:http/query` is given, appends the query string to the
+  "If `:http/query-params` is given, appends the query string to the
   request url."
   [request {:http/keys [query-params]}]
   (if-not query-params
@@ -74,24 +94,6 @@
                                                (get path-params (keyword (last match))
                                                     (first match))))))
 
-(defn- parse-request-body
-  "If `:http/payload` is given, parses it according to the supplied
-  content-type and assoc's the parsed value as `:body` into the
-  request."
-  [request {:http/keys [payload]}]
-  (if-not payload
-    request
-    (assoc request :body
-           (json-request-parser payload))))
-
-(defn- add-headers
-  "When :http/headers is present, includes additional headers in
-  the request."
-  [request {:http/keys [headers]}]
-  (if-not headers
-    request
-    (update request :headers #(merge % (normalize-header-names headers)))))
-
 (defn- add-oauth-token
   [request {:http/keys [oauth-token]}]
   (if oauth-token
@@ -99,18 +101,23 @@
     request))
 
 (defn build-http-request
-  "Returns a suited HTTP request map for the supplied Slack method."
-  [{:http/keys [verb url produces] :as req-data}]
-  (-> {:method  verb
-       :url     url
-       :headers {"content-type" (or produces default-mime-type)
-                 "accept"       default-mime-type}}
+  "Returns a suited HTTP request map to be sent by the client."
+  [{:http/keys                                      [verb url cid consumes produces]
+    :or                                             {cid      "default"
+                                                     consumes default-mime-type
+                                                     produces default-mime-type
+                                                     verb     :get} :as req-data}]
+  (-> {:method     verb
+       :url        url
+       :cid        cid
+       :started-at (System/nanoTime)
+       :headers    {"content-type" produces
+                    "accept"       consumes}}
       (merge http-defaults)
       (add-oauth-token req-data)
-      (add-headers req-data)
       (expand-path-params req-data)
-      (parse-request-body req-data)
-      (add-query-string req-data)))
+      (add-query-string req-data)
+      (parse-request-body req-data)))
 
 (defn send-async
   "Sends an asynchronous HTTP request and returns a core.async channel
@@ -118,7 +125,7 @@
   [req-data]
   (let [channel (async/chan)]
     (-> (build-http-request req-data)
-        log-request
+        log-out-request
         (httpkit-client/request #(async/put! channel (handle-http-response %))))
     channel))
 
