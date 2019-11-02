@@ -5,4 +5,4 @@ clojure -Spom
 
 mkdir -p target
 
-clojure -A:depstar -m hf.depstar.uberjar target/tekton-watcher.jar -m tekton_watcher.main
+clojure -A:depstar -m hf.depstar.uberjar target/tekton-watcher.jar
