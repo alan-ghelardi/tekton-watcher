@@ -1,5 +1,5 @@
 (ns tekton-watcher.runs
-  (:require [clojure.core.async :as async :refer [<! >! go-loop]]
+  (:require [tekton-watcher.api :refer [defpub defsub]]
             [tekton-watcher.http-client :as http-client]))
 
 (defn- contains-reason?
@@ -10,7 +10,7 @@
        (some #(= reason (:reason %)))))
 
 (defn- list-runs
-  [{:k8s/keys [host namespace]} label-selectors reason]
+  [{:cluster/keys [host namespace]} label-selectors reason]
   (->> (http-client/send-and-await #:http{:url          "{host}/apis/tekton.dev/v1alpha1/namespaces/{namespace}/taskruns"
                                           :path-params  {:host      host
                                                          :namespace namespace}
@@ -19,15 +19,15 @@
        (filter #(contains-reason? % reason))))
 
 (defn get-running-tasks
-  [context]
-  (list-runs context "!tekton-watcher/running-event-fired,!tekton-watcher/completed-event-fired" "Running"))
+  [config]
+  (list-runs config "!tekton-watcher/running-event-fired,!tekton-watcher/completed-event-fired" "Running"))
 
 (defn get-succeeded-tasks
-  [context]
-  (list-runs context "tekton-watcher/running-event-fired,!tekton-watcher/completed-event-fired" "Succeeded"))
+  [config]
+  (list-runs config "tekton-watcher/running-event-fired,!tekton-watcher/completed-event-fired" "Succeeded"))
 
 (defn- add-label
-  [{:k8s/keys [host]} run label-key]
+  [{:cluster/keys [host]} run label-key]
   (http-client/send-async #:http{:verb        :patch
                                  :url         "{host}{link}"
                                  :produces    "application/json-patch+json"
@@ -37,38 +37,26 @@
                                                 :path  (str "/metadata/labels/tekton-watcher~1" label-key)
                                                 :value "true"}]}))
 
-(defn watch-running-tasks
-  [channel context]
-  (go-loop []
-    (let [task-runs (get-running-tasks context)]
-      (when (seq task-runs)
-        (doseq [task-run task-runs]
-          (>! channel #:events{:kind      :task-runs/running
-                               :resource task-run})))
-      (<! (async/timeout 100))
-      (recur))))
+(defpub watch-running-tasks
+  #{:task-run/running}
+  [config]
+  (->> config
+       get-running-tasks
+       (map #(assoc {:message/topic :task-run/running}
+                    :message/resource %))))
 
-(defn watch-succeeded-tasks
-  [channel context]
-  (go-loop []
-    (let [task-runs (get-succeeded-tasks context)]
-      (when (seq task-runs)
-        (doseq [task-run task-runs]
-          (>! channel #:events{:kind      :task-runs/succeeded
-                               :resource task-run})))
-      (<! (async/timeout 100))
-      (recur))))
+(defpub watch-completed-tasks
+  #{:task-run/succeeded :task-run/failed}
+  [config]
+  (->> config
+       get-succeeded-tasks
+       (map #(assoc {:message/topic :task-run/succeeded}
+                    :message/resource %))))
 
-(defn run-started
-  [channel context]
-  (go-loop []
-    (let [{task-run :events/resource} (<! channel)]
-      (add-label context task-run "running-event-fired")
-      (recur))))
+(defsub run-started :task-run/running
+  [task-run config]
+  (add-label config task-run "running-event-fired"))
 
-(defn run-succeeded
-  [channel context]
-  (go-loop []
-    (let [{task-run :events/resource} (<! channel)]
-      (add-label context task-run "completed-event-fired")
-      (recur))))
+(defsub run-succeeded :task-run/succeeded
+  [task-run config]
+  (add-label config task-run "completed-event-fired"))

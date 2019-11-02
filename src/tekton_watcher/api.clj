@@ -31,30 +31,31 @@
   (go-loop []
     (let [messages (handler config)]
       (doseq [message messages]
-        (let [cid                      (correlation-id)
-              {:keys [topic resource]} message]
+        (let [cid                              (correlation-id)
+              {:message/keys [topic resource]} message]
           (log/info :out-message :publisher publisher-name :cid cid :topic topic :resource-name (get-in resource [:metadata :name]))
           (>! channel (assoc message :message/cid cid))))
-      (<! (async/timeout 100))
+      (<! (async/timeout 500))
       (recur))))
 
 (defn publisher
-  [{:keys [publisher-name] :as options}]
+  [{:keys [publisher-name topics] :as options}]
   (let [channel (async/chan)]
-    (log/info :starting-publisher :publisher publisher-name)
+    (log/info :starting-publisher :publisher publisher-name :topics topics)
     (publisher* (assoc options :channel channel))
     (async/pub channel :message/topic)))
 
 (defmacro defpub
   [name topics args & body]
-  (let [pub-name (clojure.core/name name)]
+  (let [pub-name (qualified-name *ns* (clojure.core/name name))]
     `(def ~name
        #:publisher{:topics ~topics
                    :start  (fn [config#]
                              (publisher {:config         config#
                                          :handler        (fn ~args
                                                            ~@body)
-                                         :publisher-name (qualified-name pub-name)}))})))
+                                         :publisher-name ~pub-name
+                                         :topics         ~topics}))})))
 
 (defn- subscriber*
   [{:keys [config channel handler subscriber-name]}]
@@ -65,7 +66,7 @@
           resource-name           (get-in resource [:metadata :name])]
       (try
         (log/info :in-message :subscriber subscriber-name :cid cid :topic topic :resource-name resource-name)
-        (handler message config)
+        (handler resource config)
         (catch Throwable t
           (log/error t :in-message-error :subscriber subscriber-name :cid cid :topic topic :resource-name resource-name)))
       (recur))))
@@ -73,13 +74,13 @@
 (defn subscriber
   [{:keys [publisher subscriber-name topic] :as options}]
   (let [channel (async/chan)]
-    (log/info :starting-subscriber :subscriber-name subscriber-name :topic topic)
+    (log/info :starting-subscriber :subscriber subscriber-name :topic topic)
     (subscriber* (assoc options :channel channel))
     (async/sub publisher topic channel)))
 
 (defmacro defsub
   [name topic args & body]
-  (let [pub-name (clojure.core/name name)]
+  (let [sub-name (qualified-name *ns* (clojure.core/name name))]
     `(def ~name
        #:subscriber{:topic ~topic
                     :start (fn        [publisher# config#]
@@ -87,7 +88,7 @@
                                           :handler         (fn ~args
                                                              ~@body)
                                           :publisher       publisher#
-                                          :subscriber-name (qualified-name *ns* ~pub-name)
+                                          :subscriber-name ~sub-name
                                           :topic           ~topic}))})))
 
 (defn start-messaging
