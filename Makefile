@@ -13,5 +13,4 @@ release: build
 #	@git tag $(tag) && git push origin $(tag)
 	@docker push $(image)
 	@docker tag $(image) $(latest_image) && docker push $(latest_image)
-	@make clean
 	@echo "Done"
