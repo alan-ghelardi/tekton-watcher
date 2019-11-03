@@ -18,7 +18,7 @@
   []
   {:cluster/host       "http://localhost:8080"
    :cluster/namespace  "default"
-   :github/oauth-token (slurp (str (System/getProperty "user.home") "/.github-token"))})
+   :github/oauth-token (slurp "/etc/github-statuses-updater/oauth-token")})
 
 (defn -main
   [& _]
