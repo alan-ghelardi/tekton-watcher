@@ -24,9 +24,10 @@
 
 (defn- log-out-response
   [{:keys [status opts]}]
-  (let [{:keys [cid started-at]} opts
+  (let [{:keys [cid started-at url]} opts
         elapsed-time             (/ (double (- (. System (nanoTime)) started-at)) 1000000.0)]
     (log/info :out-response :cid cid
+              :url url
               :status (or status :unknown)
               :elapsed-time-ms elapsed-time)))
 
