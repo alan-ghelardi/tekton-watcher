@@ -4,8 +4,8 @@
             [clojure.java.io :as io]
             [clojure.string :as string]
             [clojure.tools.logging :as log]
-            [clojure.walk :as walk]
-            [org.httpkit.client :as httpkit-client])
+            [org.httpkit.client :as httpkit-client]
+            [tekton-watcher.misc :as misc])
   (:import java.net.URLEncoder))
 
 (def ^:private http-defaults
@@ -25,7 +25,7 @@
 (defn- log-out-response
   [{:keys [status opts]}]
   (let [{:keys [cid started-at url]} opts
-        elapsed-time             (/ (double (- (. System (nanoTime)) started-at)) 1000000.0)]
+        elapsed-time                 (/ (double (- (. System (nanoTime)) started-at)) 1000000.0)]
     (log/info :out-response :cid cid
               :url url
               :status (or status :unknown)
@@ -91,9 +91,7 @@
 (defn- expand-path-params
   [request {:http/keys [url path-params]}]
   (assoc request :url
-         (string/replace url #"\{([^\}]+)\}" (fn [match]
-                                               (get path-params (keyword (last match))
-                                                    (first match))))))
+         (misc/render url path-params)))
 
 (defn- add-oauth-token
   [request {:http/keys [oauth-token]}]
@@ -103,11 +101,11 @@
 
 (defn build-http-request
   "Returns a suited HTTP request map to be sent by the client."
-  [{:http/keys                                      [verb url cid consumes produces]
-    :or                                             {cid      "default"
-                                                     consumes default-mime-type
-                                                     produces default-mime-type
-                                                     verb     :get} :as req-data}]
+  [{:http/keys                                                      [verb url cid consumes produces]
+    :or                                                             {cid      "default"
+                                                                     consumes default-mime-type
+                                                                     produces default-mime-type
+                                                                     verb     :get} :as req-data}]
   (-> {:method     verb
        :url        url
        :cid        cid
