@@ -39,7 +39,7 @@
                                        :oauth-token oauth-token
                                        :path-params {:sha sha}
                                        :payload     {:state       state
-                                                     :context     (str "nubank/cd: " task-name)
+                                                     :context     (str "nubank/ci-cd: " task-name)
                                                      :description description
                                                      :target_url  (link-to-task-run-on-dashboard task-run config)}})))))
 
