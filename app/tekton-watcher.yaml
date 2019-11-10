@@ -61,7 +61,13 @@ spec:
             - name: github-statuses-updater
               mountPath: "/etc/github-statuses-updater"
               readOnly: true
+              - name: config
+                mountPath: "/etc/tekton-watcher/config.edn"
+              readOnly: true
       volumes:
         - name: github-statuses-updater
           secret:
             secretName: github-statuses-updater
+            - name: config
+              configMap:
+                name: tekton-watcher-config
